@@ -77,7 +77,7 @@ MonoBehaviour:
     m_Value: 1
   WhiteIntensity:
     m_OverrideState: 1
-    m_Value: 0.15
+    m_Value: 0.1
   Contrast:
     m_OverrideState: 1
     m_Value: 0.745
