@@ -12,14 +12,32 @@ namespace Melon_Tonemapper.Unity
 {
 	using System;
 	using UnityEngine;
+	using UnityEngine.Experimental.Rendering;
 	using UnityEngine.Rendering;
 	using UnityEngine.Rendering.HighDefinition;
+	using UnityEngine.Serialization;
 
 	[Serializable]
 	[SupportedOnRenderPipeline(typeof(HDRenderPipelineAsset))]
 	sealed class MelonTonemapping : CustomPostProcessVolumeComponent, IPostProcessComponent
 	{
+		static readonly int k_MainTex = Shader.PropertyToID("_MainTex");
+		static readonly int k_HDRIndex = Shader.PropertyToID("_HDRIndex");
 		public BoolParameter isActive = new(true, true);
+
+		// Exposure and clamping are driven by HDRP; Melon reads globals in HLSL
+
+		[Tooltip("Override HDR output parameters below when enabled.")]
+		public BoolParameter OverrideHDRSettings = new(false, false);
+
+		[Tooltip("Display paper white (nits). Used when Override HDR Settings is enabled.")]
+		public ClampedFloatParameter PaperWhite = new(300.0f, 1.0f, 10000.0f, false);
+
+		[Tooltip("Minimum display luminance (nits). Used when Override HDR Settings is enabled.")]
+		public ClampedFloatParameter MinNits = new(0.005f, 0.0f, 50.0f, false);
+
+		[Tooltip("Maximum display luminance (nits). Used when Override HDR Settings is enabled.")]
+		public ClampedFloatParameter MaxNits = new(1000.0f, 10.0f, 10000.0f, false);
 
 		[Tooltip("Default to 0.15")]
 		public ClampedFloatParameter WhiteIntensity = new(0.15f, 0, 1, true);
@@ -27,19 +45,25 @@ namespace Melon_Tonemapper.Unity
 		[Tooltip("Default to 0.64")]
 		public ClampedFloatParameter Contrast = new(0.64f, 0, 1, true);
 
-		Material m_Material;
+		[FormerlySerializedAs("m_Material")]
+		[SerializeField]
+		[HideInInspector]
+		Material material;
 
 		public override CustomPostProcessInjectionPoint injectionPoint =>
 			CustomPostProcessInjectionPoint.AfterPostProcess;
 
+		public override bool visibleInSceneView => true;
+
 		public bool IsActive()
 		{
-			return m_Material != null && isActive.value;
+			return material != null && isActive.value;
 		}
 
 		public override void Setup()
 		{
-			m_Material = CoreUtils.CreateEngineMaterial("FullScreen/MelonTonemapping");
+			if (!material)
+				material = CoreUtils.CreateEngineMaterial("FullScreen/MelonTonemapping");
 		}
 
 		public override void Render(
@@ -49,20 +73,78 @@ namespace Melon_Tonemapper.Unity
 			RTHandle destination
 		)
 		{
-			Debug.Assert(m_Material != null);
+			Debug.Assert(material != null);
 
-			m_Material.SetFloat(ShaderIDs.Contrast, Contrast.value);
-			m_Material.SetFloat(ShaderIDs.WhiteIntensity, WhiteIntensity.value);
-			m_Material.SetTexture("_MainTex", source);
+			material.SetFloat(ShaderIDs.Contrast, Contrast.value);
+			material.SetFloat(ShaderIDs.WhiteIntensity, WhiteIntensity.value);
+
+			// Drive Post-Exposure from the active volume so bloom stays consistent with HDRP's pipeline
+			// (HDRP multiplies PostExposure just before grading when built-in tonemapping is used).
+			var stack = VolumeManager.instance.stack;
+			var colorAdj = stack.GetComponent<ColorAdjustments>();
+			// No direct exposure push; HDRP handles pre-exposure and HDR output
+
+			// If the destination is HDR (e.g. R11G11B10 or FP16), keep output unclamped so HDR output conversion can occur later.
+			bool isHdrTarget = false;
+			if (destination != null && destination.rt != null)
+			{
+				var fmt = destination.rt.descriptor.graphicsFormat;
+				isHdrTarget =
+					fmt == GraphicsFormat.B10G11R11_UFloatPack32
+					|| fmt == GraphicsFormat.R16G16B16A16_SFloat
+					|| fmt == GraphicsFormat.R32G32B32A32_SFloat;
+			}
+			// No explicit clamp flag; handled in HLSL based on HDR output path
+
 			//_MainTex is a hacky way to explicitly include support for dynamic resolution, as unity's documentation suggests
 			//can't care enough to look at their source codes to for a non-hacky way - it works
 
-			HDUtils.DrawFullScreen(cmd, m_Material, destination);
+			material.SetTexture(k_MainTex, source);
+
+			// Configure HDR output keywords and parameters so our shader can use HDROutput.hlsl
+			if (HDROutputSettings.main != null && HDROutputSettings.main.active)
+			{
+				var gamut = HDROutputSettings.main.displayColorGamut;
+				HDROutputUtils.ConfigureHDROutput(
+					material,
+					gamut,
+					HDROutputUtils.Operation.ColorConversion
+				);
+				// Provide _HDROutputParams vectors like HDRP FinalPass
+				var tonemapping = stack.GetComponent<Tonemapping>() ?? new Tonemapping();
+				var info = new HDROutputUtils.HDRDisplayInformation(
+					HDROutputSettings.main.maxFullFrameToneMapLuminance,
+					HDROutputSettings.main.maxToneMapLuminance,
+					HDROutputSettings.main.minToneMapLuminance,
+					HDROutputSettings.main.paperWhiteNits
+				);
+				Vector4 p1,
+					p2;
+				GetHDROutParams(
+					info,
+					gamut,
+					tonemapping,
+					OverrideHDRSettings.value,
+					MinNits.value,
+					MaxNits.value,
+					PaperWhite.value,
+					out p1,
+					out p2
+				);
+				material.SetVector(ShaderIDs.HDROutputParams, p1);
+				material.SetVector(ShaderIDs.HDROutputParams2, p2);
+			}
+			else
+			{
+				HDROutputUtils.ConfigureHDROutput(material, HDROutputUtils.Operation.None);
+			}
+
+			HDUtils.DrawFullScreen(cmd, material, destination);
 		}
 
 		public override void Cleanup()
 		{
-			CoreUtils.Destroy(m_Material);
+			CoreUtils.Destroy(material);
 		}
 
 		internal class ShaderIDs
@@ -70,6 +152,67 @@ namespace Melon_Tonemapper.Unity
 			// public static readonly int k_InputTexture = Shader.PropertyToID("_InputTexture");
 			public static readonly int Contrast = Shader.PropertyToID("_Contrast");
 			public static readonly int WhiteIntensity = Shader.PropertyToID("_WhiteIntensity");
+			public static readonly int HDROutputParams = Shader.PropertyToID("_HDROutputParams");
+			public static readonly int HDROutputParams2 = Shader.PropertyToID("_HDROutputParams2");
+		}
+
+		static void GetHDROutParams(
+			HDROutputUtils.HDRDisplayInformation hdrInfo,
+			ColorGamut gamut,
+			Tonemapping tonemapping,
+			bool useOverrides,
+			float overrideMinNits,
+			float overrideMaxNits,
+			float overridePaperWhite,
+			out Vector4 p1,
+			out Vector4 p2
+		)
+		{
+			float minNits = hdrInfo.minToneMapLuminance;
+			float maxNits = hdrInfo.maxToneMapLuminance;
+			float paperWhite = hdrInfo.paperWhiteNits;
+			int eetfMode = 0;
+			float hueShift = 0.0f;
+
+			if (useOverrides)
+			{
+				minNits = overrideMinNits;
+				maxNits = overrideMaxNits;
+				paperWhite = overridePaperWhite;
+			}
+			else
+			{
+				bool failedLimits = minNits < 0 || maxNits <= 0;
+				if (failedLimits && tonemapping.detectBrightnessLimits.value)
+				{
+					minNits = 0;
+					maxNits = 1000;
+				}
+				bool failedPW = paperWhite <= 0;
+				if (failedPW && tonemapping.detectPaperWhite.value)
+				{
+					paperWhite = 300;
+				}
+			}
+
+			if (!useOverrides)
+			{
+				if (!tonemapping.detectPaperWhite.value)
+					paperWhite = tonemapping.paperWhite.value;
+				if (!tonemapping.detectBrightnessLimits.value)
+				{
+					minNits = tonemapping.minNits.value;
+					maxNits = tonemapping.maxNits.value;
+				}
+			}
+
+			p1 = new Vector4(minNits, maxNits, paperWhite, 1f / Mathf.Max(0.001f, paperWhite));
+			p2 = new Vector4(
+				eetfMode,
+				hueShift,
+				paperWhite,
+				(int)ColorGamutUtility.GetColorPrimaries(gamut)
+			);
 		}
 	}
 }

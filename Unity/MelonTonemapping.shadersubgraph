@@ -647,10 +647,10 @@
         "m_Expanded": true,
         "m_Position": {
             "serializedVersion": "2",
-            "x": 2511.0,
-            "y": 1123.0,
-            "width": 130.0,
-            "height": 118.0
+            "x": 2511.333251953125,
+            "y": 1123.333251953125,
+            "width": 133.33349609375,
+            "height": 119.9998779296875
         }
     },
     "m_Slots": [
@@ -1093,8 +1093,8 @@
     "m_ObjectId": "5241f2c92b39432ab3cb494f9952feba",
     "m_Title": "Contrast",
     "m_Position": {
-        "x": 2474.0,
-        "y": 1064.5
+        "x": 2473.33349609375,
+        "y": 1064.66650390625
     }
 }
 
@@ -1278,6 +1278,8 @@
     "overrideHLSLDeclaration": false,
     "hlslDeclarationOverride": 0,
     "m_Hidden": false,
+    "m_PerRendererData": false,
+    "m_customAttributes": [],
     "m_Value": {
         "x": 0.0,
         "y": 0.0,
@@ -1425,12 +1427,24 @@
     "overrideHLSLDeclaration": false,
     "hlslDeclarationOverride": 2,
     "m_Hidden": false,
+    "m_PerRendererData": false,
+    "m_customAttributes": [],
     "m_Value": 0.15000000596046449,
     "m_FloatType": 0,
     "m_RangeValues": {
         "x": 0.0,
         "y": 1.0
-    }
+    },
+    "m_SliderType": 0,
+    "m_SliderPower": 3.0,
+    "m_EnumType": 0,
+    "m_CSharpEnumString": "",
+    "m_EnumNames": [
+        "Default"
+    ],
+    "m_EnumValues": [
+        0
+    ]
 }
 
 {
@@ -1679,12 +1693,24 @@
     "overrideHLSLDeclaration": false,
     "hlslDeclarationOverride": 2,
     "m_Hidden": false,
+    "m_PerRendererData": false,
+    "m_customAttributes": [],
     "m_Value": 0.6399999856948853,
     "m_FloatType": 0,
     "m_RangeValues": {
         "x": 0.0,
         "y": 1.0
-    }
+    },
+    "m_SliderType": 0,
+    "m_SliderPower": 3.0,
+    "m_EnumType": 0,
+    "m_CSharpEnumString": "",
+    "m_EnumNames": [
+        "Default"
+    ],
+    "m_EnumValues": [
+        0
+    ]
 }
 
 {
@@ -1912,8 +1938,8 @@
     "m_ObjectId": "eb016d12649a41379c39c6fa1dd5257a",
     "m_Title": "White Factor",
     "m_Position": {
-        "x": 2585.500244140625,
-        "y": 1355.5
+        "x": 2584.666748046875,
+        "y": 1355.33349609375
     }
 }
 
