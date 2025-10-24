@@ -1,4 +1,4 @@
-﻿#region Header
+#region Header
 
 // **    Copyright (C) 2023 Nicolas Reinhard, @LTMX. All rights reserved.
 // **    Github Profile: https://github.com/LTMX
@@ -6,7 +6,7 @@
 
 #endregion
 
-#if UNITY_HDRP
+#if UNITY_HDRP || UNITY_URP
 
 namespace Melon_Tonemapper.Unity
 {
@@ -14,18 +14,29 @@ namespace Melon_Tonemapper.Unity
 	using UnityEngine;
 	using UnityEngine.Experimental.Rendering;
 	using UnityEngine.Rendering;
-	using UnityEngine.Rendering.HighDefinition;
 	using UnityEngine.Serialization;
+#if UNITY_HDRP
+	using UnityEngine.Rendering.HighDefinition;
+#endif
+#if UNITY_URP
+	using UnityEngine.Rendering.Universal;
+#endif
 
 	[Serializable]
+#if UNITY_HDRP
 	[SupportedOnRenderPipeline(typeof(HDRenderPipelineAsset))]
-	sealed class MelonTonemapping : CustomPostProcessVolumeComponent, IPostProcessComponent
+	public sealed class MelonTonemapping : CustomPostProcessVolumeComponent, IPostProcessComponent
+#elif UNITY_URP
+	[SupportedOnRenderPipeline(typeof(UniversalRenderPipelineAsset))]
+	[VolumeComponentMenu("Post-processing/Melon Tonemapping")]
+	public sealed class MelonTonemapping : VolumeComponent, IPostProcessComponent
+#endif
 	{
 		static readonly int k_MainTex = Shader.PropertyToID("_MainTex");
 		static readonly int k_HDRIndex = Shader.PropertyToID("_HDRIndex");
 		public BoolParameter isActive = new(true, true);
 
-		// Exposure and clamping are driven by HDRP; Melon reads globals in HLSL
+		// Exposure and clamping are driven by render pipeline; Melon reads globals in HLSL
 
 		[Tooltip("Override HDR output parameters below when enabled.")]
 		public BoolParameter OverrideHDRSettings = new(false, false);
@@ -45,6 +56,7 @@ namespace Melon_Tonemapper.Unity
 		[Tooltip("Default to 0.64")]
 		public ClampedFloatParameter Contrast = new(0.64f, 0, 1, true);
 
+#if UNITY_HDRP
 		[FormerlySerializedAs("m_Material")]
 		[SerializeField]
 		[HideInInspector]
@@ -54,12 +66,20 @@ namespace Melon_Tonemapper.Unity
 			CustomPostProcessInjectionPoint.AfterPostProcess;
 
 		public override bool visibleInSceneView => true;
+#endif
 
 		public bool IsActive()
 		{
+#if UNITY_HDRP
 			return material != null && isActive.value;
+#elif UNITY_URP
+			return isActive.value;
+#else
+			return false;
+#endif
 		}
 
+#if UNITY_HDRP
 		public override void Setup()
 		{
 			if (!material)
@@ -146,6 +166,7 @@ namespace Melon_Tonemapper.Unity
 		{
 			CoreUtils.Destroy(material);
 		}
+#endif
 
 		internal class ShaderIDs
 		{
@@ -156,6 +177,56 @@ namespace Melon_Tonemapper.Unity
 			public static readonly int HDROutputParams2 = Shader.PropertyToID("_HDROutputParams2");
 		}
 
+		internal static void GetHDROutParams(
+			float minNitsIn,
+			float maxNitsIn,
+			float paperWhiteIn,
+			ColorGamut gamut,
+			bool useOverrides,
+			float overrideMinNits,
+			float overrideMaxNits,
+			float overridePaperWhite,
+			out Vector4 p1,
+			out Vector4 p2
+		)
+		{
+			var minNits = minNitsIn;
+			var maxNits = maxNitsIn;
+			var paperWhite = paperWhiteIn;
+			var eetfMode = 0;
+			var hueShift = 0.0f;
+
+			if (useOverrides)
+			{
+				minNits = overrideMinNits;
+				maxNits = overrideMaxNits;
+				paperWhite = overridePaperWhite;
+			}
+			else
+			{
+				var failedLimits = minNits < 0 || maxNits <= 0;
+				if (failedLimits)
+				{
+					minNits = 0;
+					maxNits = 1000;
+				}
+				var failedPW = paperWhite <= 0;
+				if (failedPW)
+				{
+					paperWhite = 300;
+				}
+			}
+
+			p1 = new Vector4(minNits, maxNits, paperWhite, 1f / Mathf.Max(0.001f, paperWhite));
+			p2 = new Vector4(
+				eetfMode,
+				hueShift,
+				paperWhite,
+				(int)ColorGamutUtility.GetColorPrimaries(gamut)
+			);
+		}
+
+#if UNITY_HDRP
 		static void GetHDROutParams(
 			HDROutputUtils.HDRDisplayInformation hdrInfo,
 			ColorGamut gamut,
@@ -171,16 +242,8 @@ namespace Melon_Tonemapper.Unity
 			float minNits = hdrInfo.minToneMapLuminance;
 			float maxNits = hdrInfo.maxToneMapLuminance;
 			float paperWhite = hdrInfo.paperWhiteNits;
-			int eetfMode = 0;
-			float hueShift = 0.0f;
 
-			if (useOverrides)
-			{
-				minNits = overrideMinNits;
-				maxNits = overrideMaxNits;
-				paperWhite = overridePaperWhite;
-			}
-			else
+			if (!useOverrides)
 			{
 				bool failedLimits = minNits < 0 || maxNits <= 0;
 				if (failedLimits && tonemapping.detectBrightnessLimits.value)
@@ -193,10 +256,7 @@ namespace Melon_Tonemapper.Unity
 				{
 					paperWhite = 300;
 				}
-			}
 
-			if (!useOverrides)
-			{
 				if (!tonemapping.detectPaperWhite.value)
 					paperWhite = tonemapping.paperWhite.value;
 				if (!tonemapping.detectBrightnessLimits.value)
@@ -206,14 +266,20 @@ namespace Melon_Tonemapper.Unity
 				}
 			}
 
-			p1 = new Vector4(minNits, maxNits, paperWhite, 1f / Mathf.Max(0.001f, paperWhite));
-			p2 = new Vector4(
-				eetfMode,
-				hueShift,
+			GetHDROutParams(
+				minNits,
+				maxNits,
 				paperWhite,
-				(int)ColorGamutUtility.GetColorPrimaries(gamut)
+				gamut,
+				useOverrides,
+				overrideMinNits,
+				overrideMaxNits,
+				overridePaperWhite,
+				out p1,
+				out p2
 			);
 		}
+#endif
 	}
 }
 
